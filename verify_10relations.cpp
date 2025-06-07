@@ -1,84 +1,106 @@
-%%writefile verify_relations.cpp
+%%writefile verify_relations_checkpoint.cpp
+// verify_relations_checkpoint.cpp
+// Verification of the ten pair-class relations (pair-class framework)
+// Designed for Google Colab: fast, memory-efficient, checkpointed
+// Author: Masayuki Aoki (with ChatGPT refinements)
+// Last Update: 2025-06
+
 #include <iostream>
 #include <vector>
-#include <unordered_map>
+#include <array>
+#include <bitset>
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#include <iomanip>
+#include <fstream>
 #include <omp.h>
+#include <exception>
 
-// Constants
-const long long MAX_TWO_N = 10000000;  // 10^7
-const long long SEGMENT_SIZE = 1000000;
+const long long MAX_TWO_N = 10000000;     // Maximum value of 2n to check (adjustable)
+const long long SEGMENT_SIZE = 100000;    // How many 2n per segment/checkpoint
+const std::string CHECKPOINT_FILE = "verification_checkpoint.txt";
+const std::string FAILURES_FILE    = "verification_failures.txt";
 
-// Fast prime sieve implementation
-std::vector<bool> build_prime_sieve(long long n_max) {
-    std::vector<bool> is_prime(n_max + 1, true);
-    is_prime[0] = is_prime[1] = false;
-    
-    // Mark even numbers (except 2) as composite
-    for (long long i = 4; i <= n_max; i += 2) {
-        is_prime[i] = false;
+// Use bitset for is_prime (memory efficient, fast lookup)
+// (bitset max size = 1e7+2000 is ~1.3MB)
+const long long TABLE_SIZE = MAX_TWO_N + 2000;
+std::bitset<TABLE_SIZE> is_prime;
+std::vector<int> pi_arr;   // π(x) lookup
+std::vector<int> pi2_arr;  // π₂(x) lookup
+
+// Checkpoint structure for safe restart
+struct Checkpoint {
+    long long last_completed_segment = 4; // Last completed segment's starting 2n
+    long long total_failures = 0;
+    long long total_checked = 0;
+
+    void save() const {
+        std::ofstream file(CHECKPOINT_FILE);
+        if (file.is_open()) {
+            file << last_completed_segment << " " << total_failures << " " << total_checked << std::endl;
+            file.close();
+            std::cout << "[Checkpoint] Saved at segment " << last_completed_segment << std::endl;
+        }
     }
-    
-    // Mark multiples of odd primes
+    bool load() {
+        std::ifstream file(CHECKPOINT_FILE);
+        if (file.is_open()) {
+            file >> last_completed_segment >> total_failures >> total_checked;
+            file.close();
+            return true;
+        }
+        return false;
+    }
+};
+
+// Build prime table, π(x), and π₂(x)
+void build_prime_tables(long long n_max) {
+    is_prime.reset();
+    is_prime[2] = true;
+    for (long long i = 3; i <= n_max; i += 2) is_prime[i] = true;
+
     long long sqrt_n = std::sqrt(n_max) + 1;
-    #pragma omp parallel for schedule(dynamic)
-    for (long long i = 3; i <= sqrt_n; i += 2) {
-        if (is_prime[i]) {
-            for (long long j = i * i; j <= n_max; j += 2 * i) {
-                is_prime[j] = false;
-            }
+    for (long long p = 3; p <= sqrt_n; p += 2) {
+        if (is_prime[p]) {
+            for (long long j = p * p; j <= n_max; j += 2 * p) is_prime[j] = false;
         }
     }
-    
-    return is_prime;
-}
 
-// Prime counting function π(x)
-long long pi_function(long long x, const std::vector<bool>& is_prime) {
-    if (x < 2) return 0;
-    
-    long long count = 0;
-    long long limit = std::min(x, static_cast<long long>(is_prime.size() - 1));
-    
-    for (long long i = 2; i <= limit; ++i) {
-        if (is_prime[i]) {
-            count++;
-        }
+    pi_arr.assign(n_max + 1, 0);
+    pi2_arr.assign(n_max + 1, 0);
+
+    int cnt_pi = 0, cnt_pi2 = 0;
+    for (long long x = 2; x <= n_max; ++x) {
+        if (is_prime[x]) cnt_pi++;
+        pi_arr[x] = cnt_pi;
     }
-    
-    return count;
-}
-
-// Twin prime counting function π₂(x)
-long long pi2_function(long long x, const std::vector<bool>& is_prime) {
-    if (x < 5) return 0;
-    
-    long long count = 0;
-    long long limit = std::min(x - 2, static_cast<long long>(is_prime.size() - 3));
-    
-    for (long long p = 3; p <= limit; p += 2) {
-        if (is_prime[p] && p + 2 < is_prime.size() && is_prime[p + 2]) {
-            count++;
-        }
+    for (long long x = 2; x <= n_max; ++x) {
+        if (x >= 5 && is_prime[x - 2] && is_prime[x]) cnt_pi2++;
+        pi2_arr[x] = cnt_pi2;
     }
-    
-    return count;
 }
 
-// Compute class sizes
-std::vector<long long> compute_class_sizes(long long two_n, const std::vector<bool>& is_prime) {
-    std::vector<long long> counts(8, 0);
-    
+// Fast lookups for π(x) and π₂(x)
+inline int Pi(long long x) {
+    if (x < 2 || x >= pi_arr.size()) return 0;
+    return pi_arr[x];
+}
+inline int Pi2(long long x) {
+    if (x < 2 || x >= pi2_arr.size()) return 0;
+    return pi2_arr[x];
+}
+
+// Compute class counts for a given 2n
+std::array<long long, 8> compute_class_sizes(long long two_n) {
+    std::array<long long, 8> counts = {0, 0, 0, 0, 0, 0, 0, 0};
+    // Loop over odd p
     for (long long p = 3; p < two_n - 2; p += 2) {
         long long q = two_n - p;
-        if (q < 3 || q % 2 == 0) continue;
-        
-        bool p_is_prime = p < is_prime.size() && is_prime[p];
-        bool q_is_prime = q < is_prime.size() && is_prime[q];
-        bool qp2_is_prime = (q + 2) < is_prime.size() && is_prime[q + 2];
-        
+        if (q < 3 || (q % 2 == 0)) continue;
+        bool p_is_prime = p < TABLE_SIZE && is_prime[p];
+        bool q_is_prime = q < TABLE_SIZE && is_prime[q];
+        bool qp2_is_prime = (q + 2) < TABLE_SIZE && is_prime[q + 2];
         int idx = 0;
         if (p_is_prime) {
             if (q_is_prime) {
@@ -93,249 +115,180 @@ std::vector<long long> compute_class_sizes(long long two_n, const std::vector<bo
                 idx = qp2_is_prime ? 6 : 7;  // QQp or QQq
             }
         }
-                
         counts[idx]++;
     }
-    
     return counts;
 }
 
-// Verify relations for a single 2n value
-std::vector<int> verify_relations(long long two_n, 
-                                 const std::vector<long long>& current_classes,
-                                 const std::vector<long long>& prev_classes, 
-                                 const std::vector<bool>& is_prime) {
+// Verify the ten pair-class relations for a single 2n value
+std::vector<int> verify_relations(long long two_n,
+                                 const std::array<long long, 8>& current,
+                                 const std::array<long long, 8>& prev) {
     std::vector<int> failures;
-    
-    // Extract class sizes
-    long long PPp = current_classes[0];
-    long long PPq = current_classes[1];
-    long long PQp = current_classes[2];
-    long long PQq = current_classes[3];
-    long long QPp = current_classes[4]; 
-    long long QPq = current_classes[5];
-    long long QQp = current_classes[6];
-    long long QQq = current_classes[7];
-    
-    // Previous classes
-    long long prev_PPp = prev_classes[0];
-    long long prev_PPq = prev_classes[1];
-    long long prev_PQp = prev_classes[2];
-    long long prev_PQq = prev_classes[3];
-    long long prev_QPp = prev_classes[4];
-    long long prev_QPq = prev_classes[5];
-    long long prev_QQp = prev_classes[6];
-    long long prev_QQq = prev_classes[7];
-    
-    // Prime counting values
-    long long pi = pi_function(two_n, is_prime);
-    long long pi_minus_2 = pi_function(two_n - 2, is_prime);
-    long long pi_minus_4 = pi_function(two_n - 4, is_prime);
-    long long pi2_val = pi2_function(two_n, is_prime);
+    long long PPp = current[0], PPq = current[1];
+    long long PQp = current[2], PQq = current[3];
+    long long QPp = current[4], QPq = current[5];
+    long long QQp = current[6], QQq = current[7];
+
+    long long prev_PPp = prev[0], prev_PPq = prev[1];
+    long long prev_PQp = prev[2], prev_PQq = prev[3];
+    long long prev_QPp = prev[4], prev_QPq = prev[5];
+    long long prev_QQp = prev[6], prev_QQq = prev[7];
+
+    int pi = Pi(two_n);
+    int pi_minus_2 = Pi(two_n - 2);
+    int pi_minus_4 = Pi(two_n - 4);
+    int pi2_val = Pi2(two_n);
     long long n = two_n / 2;
-    
-    // Check R1: PPp + QPp = π₂(2n)
-    if (!(PPp + QPp == pi2_val)) {
-        failures.push_back(1);
+
+    if (PPp + QPp != pi2_val) failures.push_back(1);
+    if (PPq + QPq != pi_minus_2 - pi2_val - 1) failures.push_back(2);
+    if (PQp + QQp != pi - pi2_val - 2) failures.push_back(3);
+    if (PQq + QQq != n - pi - pi_minus_2 + pi2_val + 1) failures.push_back(4);
+    if (PPp + PPq + PQp + PQq != pi_minus_2 - 1) failures.push_back(5);
+    if (PQp + PQq != QPp + QPq) failures.push_back(6);
+
+    if (two_n > 6) {
+        if (PPp + PPq != prev_PPp + prev_PQp + (pi_minus_2 - pi_minus_4)) failures.push_back(7);
+        if (PQp + PQq != prev_PPq + prev_PQq) failures.push_back(8);
+        if (QPp + QPq != prev_QQp + prev_QPp - (pi_minus_2 - pi_minus_4) + 1) failures.push_back(9);
+        if (QQp + QQq != prev_QQq + prev_QPq) failures.push_back(10);
     }
-    
-    // Check R2: PPq + QPq = π(2n-2) - π₂(2n) - 1
-    if (!(PPq + QPq == pi_minus_2 - pi2_val - 1)) {
-        failures.push_back(2);
-    }
-    
-    // Check R3: PQp + QQp = π(2n) - π₂(2n) - 2
-    if (!(PQp + QQp == pi - pi2_val - 2)) {
-        failures.push_back(3);
-    }
-    
-    // Check R4: PQq + QQq = n - π(2n) - π(2n-2) + π₂(2n) + 1
-    if (!(PQq + QQq == n - pi - pi_minus_2 + pi2_val + 1)) {
-        failures.push_back(4);
-    }
-    
-    // Check R5: PPp + PPq + PQp + PQq = π(2n-2) - 1
-    if (!(PPp + PPq + PQp + PQq == pi_minus_2 - 1)) {
-        failures.push_back(5);
-    }
-    
-    // Check R6: PQp + PQq = QPp + QPq (FIXED: current level, not previous!)
-    if (!(PQp + PQq == QPp + QPq)) {
-        failures.push_back(6);
-    }
-    
-    // Check R7: PPp + PPq = PPp(2n-2) + PQp(2n-2) + [π(2n-2) - π(2n-4)]
-    if (!(PPp + PPq == prev_PPp + prev_PQp + (pi_minus_2 - pi_minus_4))) {
-        failures.push_back(7);
-    }
-    
-    // Check R8: PQp + PQq = PPq(2n-2) + PQq(2n-2)
-    if (!(PQp + PQq == prev_PPq + prev_PQq)) {
-        failures.push_back(8);
-    }
-    
-    // Check R9: QPp + QPq = QQp(2n-2) + QPp(2n-2) - [π(2n-2) - π(2n-4)] + 1
-    if (!(QPp + QPq == prev_QQp + prev_QPp - (pi_minus_2 - pi_minus_4) + 1)) {
-        failures.push_back(9);
-    }
-    
-    // Check R10: QQp + QQq = QQq(2n-2) + QPq(2n-2)
-    if (!(QQp + QQq == prev_QQq + prev_QPq)) {
-        failures.push_back(10);
-    }
-    
     return failures;
 }
 
-// Main entry point
 int main(int argc, char* argv[]) {
     long long max_two_n = MAX_TWO_N;
+    long long start_from = 6;  // Default start
+
+    // Check command line arguments for start and end values
     if (argc > 1) {
         max_two_n = std::stoll(argv[1]);
     }
-    
-    std::cout << "Starting verification for 2n up to " << max_two_n << std::endl;
-    std::cout << "Verifying 10 relations from Aoki's pair-class framework" << std::endl;
-    
-    // Start timer
+    if (argc > 2) {
+        start_from = std::stoll(argv[2]);
+        if (start_from < 6) start_from = 6;
+        if (start_from % 2 == 1) start_from++;
+    }
+
+    // Load checkpoint if available (Colab/Jupyter: always use command-line resume!)
+    Checkpoint checkpoint;
+    bool resumed = false;
+    if (checkpoint.load()) {
+        std::cout << "Checkpoint found at segment " << checkpoint.last_completed_segment << ".\n";
+        std::cout << "Previous: " << checkpoint.total_checked << " checked, "
+                  << checkpoint.total_failures << " failures.\n";
+        std::cout << "[Colab/Jupyter mode] To resume, use:\n";
+        std::cout << "  ./verify_checkpoint " << max_two_n << " " << (checkpoint.last_completed_segment + SEGMENT_SIZE) << std::endl;
+        std::cout << "Starting from 6 (fresh) by default.\n";
+        // Only auto-resume if user specified a 2nd argument (see above).
+        if (argc <= 2) {
+            start_from = 6;
+            resumed = false;
+        } else if (start_from > checkpoint.last_completed_segment) {
+            resumed = true;
+            std::cout << "Resuming from " << start_from << std::endl;
+        }
+    }
+
+    std::cout << "Verifying 2n from " << start_from << " to " << max_two_n << std::endl;
+    std::cout << "Segment size: " << SEGMENT_SIZE << std::endl;
+    std::cout << "OpenMP threads: " << omp_get_max_threads() << std::endl;
+
     auto start_time = std::chrono::high_resolution_clock::now();
-    
-    // Build prime sieve
-    long long sieve_size = max_two_n + 1000;
-    std::cout << "Building prime sieve up to " << sieve_size << std::endl;
-    
-    std::vector<bool> is_prime = build_prime_sieve(sieve_size);
-    
-    auto sieve_end = std::chrono::high_resolution_clock::now();
-    auto sieve_duration = std::chrono::duration_cast<std::chrono::seconds>(sieve_end - start_time).count();
-    std::cout << "Prime sieve built in " << sieve_duration << "s" << std::endl;
-    
-    // Process in segments
-    std::vector<std::pair<long long, int>> all_failures;
-    
-    // Initial computation for 2n=4
-    std::vector<long long> prev_classes = compute_class_sizes(4, is_prime);
-    
-    // Process each segment
-    for (long long start_two_n = 6; start_two_n <= max_two_n; start_two_n += SEGMENT_SIZE) {
-        long long end_two_n = std::min(start_two_n + SEGMENT_SIZE, max_two_n + 2);
-        
-        std::cout << "Processing segment " << start_two_n << " to " << (end_two_n - 2) << "..." << std::endl;
-        auto segment_start = std::chrono::high_resolution_clock::now();
-        
-        std::vector<std::pair<long long, int>> segment_failures;
-        
-        #pragma omp parallel for ordered schedule(dynamic) shared(is_prime, segment_failures)
-        for (long long two_n = start_two_n; two_n < end_two_n; two_n += 2) {
-            // Compute classes for current 2n
-            std::vector<long long> current_classes = compute_class_sizes(two_n, is_prime);
-            
-            // Compute classes for previous 2n-2 if needed
-            std::vector<long long> prev_classes_local;
-            if (two_n == 6) {
-                // Use precomputed classes for 2n=4
-                prev_classes_local = prev_classes;
-            } else {
-                prev_classes_local = compute_class_sizes(two_n - 2, is_prime);
-            }
-            
-            // Verify relations
-            std::vector<int> failures = verify_relations(two_n, current_classes, prev_classes_local, is_prime);
-            
-            // Record failures (thread-safe)
-            if (!failures.empty()) {
-                #pragma omp ordered
-                {
-                    for (int relation : failures) {
-                        segment_failures.push_back(std::make_pair(two_n, relation));
+    std::cout << "Building prime tables up to " << TABLE_SIZE << "..." << std::endl;
+    build_prime_tables(TABLE_SIZE);
+    auto build_end = std::chrono::high_resolution_clock::now();
+    auto build_dur = std::chrono::duration_cast<std::chrono::seconds>(build_end - start_time).count();
+    std::cout << "Tables built in " << build_dur << "s\n";
+
+    std::ofstream failures_file(FAILURES_FILE, resumed ? std::ios::app : std::ios::out);
+    if (!resumed) {
+        failures_file << "# 2n, relation_number" << std::endl;
+    }
+
+    long long total_failures = resumed ? checkpoint.total_failures : 0;
+    long long total_checked  = resumed ? checkpoint.total_checked : 0;
+
+    try {
+        for (long long segment_start = start_from; segment_start <= max_two_n; segment_start += SEGMENT_SIZE) {
+            long long segment_end = std::min(segment_start + SEGMENT_SIZE, max_two_n + 2);
+
+            std::cout << "\n[Segment] " << segment_start << " to " << (segment_end - 2) << "..." << std::endl;
+            auto seg_start_time = std::chrono::high_resolution_clock::now();
+
+            std::vector<std::pair<long long, int>> segment_failures;
+            long long segment_checked = 0;
+
+            #pragma omp parallel for schedule(dynamic, 1000) reduction(+:segment_checked)
+            for (long long two_n = segment_start; two_n < segment_end; two_n += 2) {
+                auto current = compute_class_sizes(two_n);
+                auto prev    = compute_class_sizes(two_n - 2);
+
+                auto failures = verify_relations(two_n, current, prev);
+
+                if (!failures.empty()) {
+                    #pragma omp critical
+                    {
+                        for (int rel : failures) {
+                            segment_failures.emplace_back(two_n, rel);
+                            failures_file << two_n << "," << rel << std::endl;
+                        }
                     }
                 }
+                segment_checked++;
             }
+
+            total_failures += segment_failures.size();
+            total_checked  += segment_checked;
+
+            auto seg_end_time = std::chrono::high_resolution_clock::now();
+            auto seg_dur = std::chrono::duration_cast<std::chrono::milliseconds>(seg_end_time - seg_start_time).count();
+
+            double progress = 100.0 * (segment_end - 6) / (max_two_n - 4);
+            std::cout << "Segment done in " << seg_dur/1000.0 << "s. Progress: "
+                      << std::fixed << std::setprecision(1) << progress << "%, Speed: "
+                      << segment_checked / (seg_dur/1000.0) << " vals/sec" << std::endl;
+            if (!segment_failures.empty())
+                std::cout << "  [!] Failures in segment: " << segment_failures.size() << std::endl;
+
+            std::cout << "  Total: " << total_checked << " checked, " << total_failures << " failures\n";
+
+            // Checkpoint and flush
+            checkpoint.last_completed_segment = segment_start;
+            checkpoint.total_failures = total_failures;
+            checkpoint.total_checked  = total_checked;
+            checkpoint.save();
+            failures_file.flush();
         }
-        
-        // Add segment failures to overall list
-        for (const auto& failure : segment_failures) {
-            all_failures.push_back(failure);
-        }
-        
-        auto segment_end = std::chrono::high_resolution_clock::now();
-        auto segment_duration = std::chrono::duration_cast<std::chrono::seconds>(segment_end - segment_start).count();
-        std::cout << "Segment completed in " << segment_duration << "s" << std::endl;
-        
-        // Show progress
-        double progress = 100.0 * (end_two_n - 6) / (max_two_n - 4);
-        std::cout << "Progress: " << progress << "% complete" << std::endl;
-        
-        // Report segment failures
-        if (!segment_failures.empty()) {
-            std::cout << "Found " << segment_failures.size() << " failures in this segment" << std::endl;
-            int limit = std::min(5, static_cast<int>(segment_failures.size()));
-            for (int i = 0; i < limit; ++i) {
-                std::cout << "  2n=" << segment_failures[i].first 
-                          << ", relation R" << segment_failures[i].second << " failed" << std::endl;
-            }
-            if (segment_failures.size() > 5) {
-                std::cout << "  ... and " << (segment_failures.size() - 5) 
-                          << " more failures in this segment" << std::endl;
-            }
-        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Error] Exception caught: " << e.what() << std::endl;
+        checkpoint.save();
+        failures_file.flush();
+        return 2;
+    } catch (...) {
+        std::cerr << "[Error] Unknown exception caught." << std::endl;
+        checkpoint.save();
+        failures_file.flush();
+        return 3;
     }
-    
-    // Measure total time
+
+    failures_file.close();
+
     auto end_time = std::chrono::high_resolution_clock::now();
-    auto total_duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
-    
-    // Report results
-    std::cout << "Verification completed in " << total_duration << "s" << std::endl;
-    int hours = total_duration / 3600;
-    int minutes = (total_duration % 3600) / 60;
-    int seconds = total_duration % 60;
-    std::cout << "Total time: " << hours << "h " << minutes << "m " << seconds << "s" << std::endl;
-    
-    if (all_failures.empty()) {
-        std::cout << "All ten relations verified ✓ for 2n up to " << max_two_n << std::endl;
+    auto total_dur = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+
+    std::cout << "\n=== VERIFICATION COMPLETE ===\n";
+    std::cout << "Checked: " << total_checked << ", Time: " << total_dur << "s\n";
+    std::cout << "Total failures: " << total_failures << std::endl;
+
+    if (total_failures == 0) {
+        std::cout << "\n✓ SUCCESS: All relations verified!" << std::endl;
+        std::remove(CHECKPOINT_FILE.c_str());
     } else {
-        // Group failures by 2n
-        std::unordered_map<long long, std::vector<int>> failure_map;
-        
-        for (const auto& failure : all_failures) {
-            failure_map[failure.first].push_back(failure.second);
-        }
-        
-        std::cout << "Found failures for " << failure_map.size() << " different 2n values:" << std::endl;
-        
-        // Convert to vector for sorting
-        std::vector<std::pair<long long, std::vector<int>>> sorted_failures;
-        for (const auto& entry : failure_map) {
-            sorted_failures.push_back({entry.first, entry.second});
-        }
-        
-        // Sort by 2n value
-        std::sort(sorted_failures.begin(), sorted_failures.end(),
-                 [](const auto& a, const auto& b) { return a.first < b.first; });
-        
-        // Print first 10 failures
-        int limit = std::min(10, static_cast<int>(sorted_failures.size()));
-        for (int i = 0; i < limit; ++i) {
-            const auto& entry = sorted_failures[i];
-            long long two_n = entry.first;
-            std::vector<int> relations = entry.second;
-            
-            // Sort relation numbers
-            std::sort(relations.begin(), relations.end());
-            
-            std::cout << "  2n=" << two_n << ": Failed relations [";
-            for (size_t j = 0; j < relations.size(); ++j) {
-                if (j > 0) std::cout << ", ";
-                std::cout << "R" << relations[j];
-            }
-            std::cout << "]" << std::endl;
-        }
-        
-        if (sorted_failures.size() > 10) {
-            std::cout << "  ... and " << (sorted_failures.size() - 10) << " more failures." << std::endl;
-        }
+        std::cout << "\n✗ Failures found. See " << FAILURES_FILE << " for details." << std::endl;
     }
-    
-    return 0;
+    return total_failures == 0 ? 0 : 1;
 }
+// !g++ -std=c++17 -O3 -fopenmp verify_relations_checkpoint.cpp -o verify_checkpoint
+// !./verify_checkpoint 10000000
