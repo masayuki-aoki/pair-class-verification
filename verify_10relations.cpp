@@ -104,15 +104,15 @@ std::array<long long, 8> compute_class_sizes(long long two_n) {
         int idx = 0;
         if (p_is_prime) {
             if (q_is_prime) {
-                idx = qp2_is_prime ? 0 : 1;  // PPp or PPq
+                idx = qp2_is_prime ? 0 : 1;  // PPp or PPc
             } else {
-                idx = qp2_is_prime ? 2 : 3;  // PQp or PQq
+                idx = qp2_is_prime ? 2 : 3;  // PCp or PCc
             }
         } else {
             if (q_is_prime) {
-                idx = qp2_is_prime ? 4 : 5;  // QPp or QPq
+                idx = qp2_is_prime ? 4 : 5;  // CPp or CPc
             } else {
-                idx = qp2_is_prime ? 6 : 7;  // QQp or QQq
+                idx = qp2_is_prime ? 6 : 7;  // CCp or CCc
             }
         }
         counts[idx]++;
@@ -125,15 +125,15 @@ std::vector<int> verify_relations(long long two_n,
                                  const std::array<long long, 8>& current,
                                  const std::array<long long, 8>& prev) {
     std::vector<int> failures;
-    long long PPp = current[0], PPq = current[1];
-    long long PQp = current[2], PQq = current[3];
-    long long QPp = current[4], QPq = current[5];
-    long long QQp = current[6], QQq = current[7];
+    long long PPp = current[0], PPc = current[1];
+    long long PCp = current[2], PCc = current[3];
+    long long CPp = current[4], CPc = current[5];
+    long long CCp = current[6], CCc = current[7];
 
-    long long prev_PPp = prev[0], prev_PPq = prev[1];
-    long long prev_PQp = prev[2], prev_PQq = prev[3];
-    long long prev_QPp = prev[4], prev_QPq = prev[5];
-    long long prev_QQp = prev[6], prev_QQq = prev[7];
+    long long prev_PPp = prev[0], prev_PPc = prev[1];
+    long long prev_PCp = prev[2], prev_PCc = prev[3];
+    long long prev_CPp = prev[4], prev_CPc = prev[5];
+    long long prev_CCp = prev[6], prev_CCc = prev[7];
 
     int pi = Pi(two_n);
     int pi_minus_2 = Pi(two_n - 2);
@@ -141,18 +141,18 @@ std::vector<int> verify_relations(long long two_n,
     int pi2_val = Pi2(two_n);
     long long n = two_n / 2;
 
-    if (PPp + QPp != pi2_val) failures.push_back(1);
-    if (PPq + QPq != pi_minus_2 - pi2_val - 1) failures.push_back(2);
-    if (PQp + QQp != pi - pi2_val - 2) failures.push_back(3);
-    if (PQq + QQq != n - pi - pi_minus_2 + pi2_val + 1) failures.push_back(4);
-    if (PPp + PPq + PQp + PQq != pi_minus_2 - 1) failures.push_back(5);
-    if (PQp + PQq != QPp + QPq) failures.push_back(6);
+    if (PPp + CPp != pi2_val) failures.push_back(1);
+    if (PPc + CPc != pi_minus_2 - pi2_val - 1) failures.push_back(2);
+    if (PCp + CCp != pi - pi2_val - 2) failures.push_back(3);
+    if (PCc + CCc != n - pi - pi_minus_2 + pi2_val + 1) failures.push_back(4);
+    if (PPp + PPc + PCp + PCc != pi_minus_2 - 1) failures.push_back(5);
+    if (PCp + PCc != CPp + CPc) failures.push_back(6);
 
     if (two_n > 6) {
-        if (PPp + PPq != prev_PPp + prev_PQp + (pi_minus_2 - pi_minus_4)) failures.push_back(7);
-        if (PQp + PQq != prev_PPq + prev_PQq) failures.push_back(8);
-        if (QPp + QPq != prev_QQp + prev_QPp - (pi_minus_2 - pi_minus_4) + 1) failures.push_back(9);
-        if (QQp + QQq != prev_QQq + prev_QPq) failures.push_back(10);
+        if (PPp + PPc != prev_PPp + prev_PCp + (pi_minus_2 - pi_minus_4)) failures.push_back(7);
+        if (PCp + PCc != prev_PPc + prev_PCc) failures.push_back(8);
+        if (CPp + CPc != prev_CCp + prev_CPp - (pi_minus_2 - pi_minus_4) + 1) failures.push_back(9);
+        if (CCp + CCc != prev_CCc + prev_CPc) failures.push_back(10);
     }
     return failures;
 }
